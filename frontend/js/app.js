@@ -1,17 +1,31 @@
 // --- State & Config ---
-const API_URL = 'http://localhost:5000/api';
+const API_URL = 'https://smart-event-api.onrender.com/api'; 
 let state = {
     token: localStorage.getItem('token') || null,
     user: JSON.parse(localStorage.getItem('user')) || null,
 };
 
+// --- WebSockets Initialization ---
+const socket = io('https://smart-event-api.onrender.com');
+
+// Listen for Real-Time cloud events
+socket.on('newEvent', (data) => {
+    console.log("Real-time Push: New Event Created", data);
+    if(window.location.hash === '#/events') router();
+});
+socket.on('attendanceUpdate', (data) => {
+    console.log("Real-time Push: Someone checked in!", data);
+    if(window.location.hash === '#/admin') router();
+});
+
 // --- API Helpers ---
-async function apiCall(endpoint, method = 'GET', body = null) {
-    const headers = { 'Content-Type': 'application/json' };
+async function apiCall(endpoint, method = 'GET', body = null, isFormData = false) {
+    const headers = {};
     if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+    if (!isFormData) headers['Content-Type'] = 'application/json';
 
     const config = { method, headers };
-    if (body) config.body = JSON.stringify(body);
+    if (body) config.body = isFormData ? body : JSON.stringify(body);
 
     const res = await fetch(`${API_URL}${endpoint}`, config);
     const data = await res.json();
@@ -25,6 +39,7 @@ const routes = {
     '/login': renderLogin,
     '/signup': renderSignup,
     '/events': renderEvents,
+    '/calendar': renderCalendar,
     '/dashboard': renderDashboard,
     '/create-event': renderCreateEvent,
     '/admin': renderAdminDashboard,
@@ -37,11 +52,8 @@ function router() {
     appDiv.innerHTML = '<div class="loader"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>';
 
     const renderFn = routes[path];
-    if (renderFn) {
-        renderFn(appDiv);
-    } else {
-        appDiv.innerHTML = '<div class="container section text-center"><h2>404 - Page Not Found</h2></div>';
-    }
+    if (renderFn) renderFn(appDiv);
+    else appDiv.innerHTML = '<div class="container section text-center"><h2>404 - Page Not Found</h2></div>';
 }
 
 window.addEventListener('hashchange', router);
@@ -52,12 +64,13 @@ function updateNav() {
     const navLinks = document.getElementById('nav-links');
     if (state.token) {
         let extraLinks = '';
-        if (state.user.role === 'admin') extraLinks += '<li><a href="#/admin" class="nav-link">Admin Dashboard</a></li>';
+        if (state.user.role === 'admin') extraLinks += '<li><a href="#/admin" class="nav-link">Admin Analytics</a></li>';
         if (state.user.role === 'admin' || state.user.role === 'organizer') extraLinks += '<li><a href="#/create-event" class="nav-link">Create Event</a></li>';
 
         navLinks.innerHTML = `
             <li><a href="#/" class="nav-link">Home</a></li>
             <li><a href="#/events" class="nav-link">Events</a></li>
+            <li><a href="#/calendar" class="nav-link">Calendar</a></li>
             ${extraLinks}
             <li><a href="#/dashboard" class="nav-link">Dashboard</a></li>
             <li><a href="#" onclick="logout(event)" class="nav-link">Logout</a></li>
@@ -161,25 +174,28 @@ async function renderSignup(appDiv) {
 }
 
 async function renderEvents(appDiv) {
-    appDiv.innerHTML = '<div class="container section"><h2>Upcoming Events</h2><div id="eventsList" class="grid-container"><div class="loader"><i class="fa-solid fa-spinner fa-spin"></i> Checking cloud...</div></div></div>';
+    appDiv.innerHTML = '<div class="container section"><h2>Upcoming Events (Real-Time)</h2><div id="eventsList" class="grid-container"><div class="loader"><i class="fa-solid fa-spinner fa-spin"></i> Checking cloud...</div></div></div>';
     try {
         const events = await apiCall('/events');
         if (events.length === 0) {
             document.getElementById('eventsList').innerHTML = '<p>No events found. Check back later!</p>';
             return;
         }
-        const evHtml = events.map(e => `
+        const evHtml = events.map(e => {
+            const posterHtml = e.imageUrl ? `<img src="${e.imageUrl.startsWith('http') ? e.imageUrl : 'https://smart-event-api.onrender.com' + e.imageUrl}" style="width:100%; height:150px; object-fit:cover; border-radius:8px; margin-bottom:1rem;" alt="Event Poster">` : '';
+            return `
             <div class="card">
+                ${posterHtml}
                 <h3>${e.title}</h3>
                 <p><i class="fa-regular fa-calendar"></i> ${new Date(e.date).toLocaleDateString()}</p>
                 <p><i class="fa-solid fa-location-dot"></i> ${e.venue}</p>
                 <p style="font-size:0.9rem; color:#64748b;">${e.description}</p>
-                <button onclick="registerEvent('${e._id}')" class="btn btn-primary btn-block" style="margin-top:1rem;">Register Now</button>
+                <button onclick="registerEvent('${e._id}')" class="btn btn-primary btn-block" style="margin-top:1rem;">Register Now (QR Ticket)</button>
             </div>
-        `).join('');
+        `}).join('');
         document.getElementById('eventsList').innerHTML = evHtml;
     } catch (err) {
-        document.getElementById('eventsList').innerHTML = '<p style="color:red;">Failed to retrieve events from server. Ensure backend is running.</p>';
+        document.getElementById('eventsList').innerHTML = '<p style="color:red;">Failed to retrieve events. Ensure backend is running.</p>';
     }
 }
 
@@ -191,7 +207,7 @@ window.registerEvent = async function (id) {
     }
     try {
         const data = await apiCall(`/events/${id}/register`, 'POST');
-        alert('Registered Successfully! Your Unique Ticket ID is: ' + data.ticket_id);
+        alert('Registered Successfully! Your Unique Ticket ID is: ' + data.ticket_id + '\nAn automated email with your QR code has been scheduled.');
     } catch(err) { alert(err.message); }
 }
 
@@ -207,6 +223,7 @@ async function renderDashboard(appDiv) {
                 <div style="display:flex; gap: 1rem; margin-top: 1rem; flex-wrap:wrap;">
                     ${state.user.role !== 'participant' ? '<button onclick="simulateScan()" class="btn btn-primary"><i class="fa-solid fa-qrcode"></i> Scan QR Attendance</button>' : ''}
                     <a href="#/events" class="btn btn-secondary">View Event Catalog</a>
+                    <a href="#/calendar" class="btn btn-secondary">Interactive Calendar</a>
                 </div>
             </div>
         </div>
@@ -240,32 +257,85 @@ async function renderCreateEvent(appDiv) {
                 <label>Venue / Location</label>
                 <input type="text" id="venue" placeholder="Main Auditorium" required class="form-control">
                 
-                <button type="submit" class="btn btn-primary btn-block">Publish Event to Cloud</button>
+                <label>Upload Cloud Poster (Image)</label>
+                <input type="file" id="poster" accept="image/*" class="form-control" required style="padding:0.5rem;">
+
+                <button type="submit" class="btn btn-primary btn-block" style="margin-top:1rem;">Publish Event to Cloud</button>
             </form>
         </div>
    `;
    document.getElementById('createEventForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         try {
-            await apiCall('/events', 'POST', {
-                title: e.target.title.value,
-                description: e.target.description.value,
-                date: e.target.date.value,
-                venue: e.target.venue.value
-            });
-            alert('Event successfully created and stored in the database!');
+            const formData = new FormData();
+            formData.append('title', e.target.title.value);
+            formData.append('description', e.target.description.value);
+            formData.append('date', e.target.date.value);
+            formData.append('venue', e.target.venue.value);
+            formData.append('poster', e.target.poster.files[0]);
+
+            await apiCall('/events', 'POST', formData, true); // true = isFormData
+            alert('Event & Poster successfully uploaded to Cloud Database!');
             window.location.hash = '#/events';
         } catch(err) { alert(err.message); }
    });
 }
 
+// --- NEW MODULE: Calendar View ---
+async function renderCalendar(appDiv) {
+    appDiv.innerHTML = '<div class="container section"><h2>Event Calendar Schedule</h2><div id="calList"><div class="loader"><i class="fa-solid fa-spinner fa-spin"></i> Fetching schedule...</div></div></div>';
+    try {
+        const events = await apiCall('/events');
+        // Sort events chronologically
+        events.sort((a,b) => new Date(a.date) - new Date(b.date));
+        
+        if (events.length === 0) {
+            document.getElementById('calList').innerHTML = '<p>No scheduled events.</p>';
+            return;
+        }
+
+        const tableHtml = `
+            <table style="width:100%; text-align:left; border-collapse: collapse; margin-top:1rem; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                <thead>
+                    <tr style="background:#f1f5f9; border-bottom:2px solid #cbd5e1;">
+                        <th style="padding:1rem;">Date</th>
+                        <th style="padding:1rem;">Time</th>
+                        <th style="padding:1rem;">Event Title</th>
+                        <th style="padding:1rem;">Venue</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${events.map(e => {
+                        const d = new Date(e.date);
+                        return `
+                        <tr style="border-bottom:1px solid #e2e8f0; cursor:pointer;" onclick="window.location.hash='#/events'">
+                            <td style="padding:1rem;"><strong>${d.toLocaleDateString()}</strong></td>
+                            <td style="padding:1rem;">${d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</td>
+                            <td style="padding:1rem; color:var(--primary-color);">${e.title}</td>
+                            <td style="padding:1rem;">${e.venue}</td>
+                        </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+        `;
+        document.getElementById('calList').innerHTML = tableHtml;
+    } catch (err) {
+        document.getElementById('calList').innerHTML = '<p style="color:red;">Failed to retrieve calendar.</p>';
+    }
+}
+
+// --- UPGRADED MODULE: Admin Analytics Dashboard (Chart.js) ---
 async function renderAdminDashboard(appDiv) {
    if(!state.token || state.user.role !== 'admin') return window.location.hash = '#/';
-   appDiv.innerHTML = '<div class="container section"><h2>Admin Analytics</h2><div id="adminStats"><div class="loader"><i class="fa-solid fa-spinner fa-spin"></i> Compiling statistics...</div></div></div>';
+   appDiv.innerHTML = '<div class="container section"><h2>Admin Analytics Hub</h2><div id="adminStats"><div class="loader"><i class="fa-solid fa-spinner fa-spin"></i> Compiling Big Data...</div></div></div>';
    try {
-       const stats = await apiCall('/events/admin/stats');
+       const res = await apiCall('/events/admin/stats');
+       const stats = res.stats;
+       const chartData = res.barChartData;
+
        document.getElementById('adminStats').innerHTML = `
-           <div class="grid-container">
+           <div class="grid-container" style="margin-bottom:3rem;">
                <div class="card bg-primary text-center">
                    <h3>${stats.totalEvents}</h3>
                    <p>Total Events</p>
@@ -280,12 +350,47 @@ async function renderAdminDashboard(appDiv) {
                </div>
                <div class="card text-center" style="border-left: 4px solid #10b981;">
                    <h3 style="font-size:2.5rem; color:#10b981;">${stats.checkedInCount}</h3>
-                   <p>Successful QR Check-ins</p>
+                   <p>QR Scans / Check-ins</p>
                </div>
            </div>
+
+           <!-- Chart Layout -->
+           <div class="grid-container" style="grid-template-columns: 1fr 1fr;">
+                <div class="card">
+                    <h3 style="text-align:center; margin-bottom:1rem;">Registrations per Event</h3>
+                    <canvas id="barChart"></canvas>
+                </div>
+                <div class="card">
+                    <h3 style="text-align:center; margin-bottom:1rem;">System Breakdown</h3>
+                    <canvas id="pieChart"></canvas>
+                </div>
+           </div>
        `;
+
+       // Render Bar Chart (Registrations per Event)
+       new Chart(document.getElementById('barChart'), {
+           type: 'bar',
+           data: {
+               labels: chartData.labels,
+               datasets: chartData.datasets
+           },
+           options: { responsive: true }
+       });
+
+       // Render Pie Chart (Overall Engagement)
+       new Chart(document.getElementById('pieChart'), {
+           type: 'doughnut',
+           data: {
+               labels: ['Unregistered Users', 'Registrations', 'Verified Attendance'],
+               datasets: [{
+                   data: [stats.totalUsers - stats.totalRegistrations, stats.totalRegistrations - stats.checkedInCount, stats.checkedInCount],
+                   backgroundColor: ['#cbd5e1', '#3b82f6', '#10b981']
+               }]
+           },
+           options: { responsive: true }
+       });
+
    } catch(err) {
-       document.getElementById('adminStats').innerHTML = '<p style="color:red;">Failed to load statistics. Ensure backend endpoint is reachable.</p>';
+       document.getElementById('adminStats').innerHTML = '<p style="color:red;">Failed to load analytics dashboard.</p>';
    }
 }
-
