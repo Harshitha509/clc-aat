@@ -13,6 +13,10 @@ socket.on('newEvent', (data) => {
     console.log("Real-time Push: New Event Created", data);
     if(window.location.hash === '#/events') router();
 });
+socket.on('eventDeleted', (id) => {
+    console.log("Real-time Push: Event Deleted", id);
+    if(window.location.hash === '#/events' || window.location.hash === '#/calendar') router();
+});
 socket.on('attendanceUpdate', (data) => {
     console.log("Real-time Push: Someone checked in!", data);
     if(window.location.hash === '#/admin') router();
@@ -47,7 +51,8 @@ const routes = {
 
 function router() {
     updateNav();
-    const path = window.location.hash.slice(1) || '/';
+    const hashParts = window.location.hash.split('?');
+    const path = hashParts[0].slice(1) || '/';
     const appDiv = document.getElementById('app');
     appDiv.innerHTML = '<div class="loader"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>';
 
@@ -183,6 +188,17 @@ async function renderEvents(appDiv) {
         }
         const evHtml = events.map(e => {
             const posterHtml = e.imageUrl ? `<img src="${e.imageUrl.startsWith('http') ? e.imageUrl : 'https://smart-event-api.onrender.com' + e.imageUrl}" style="width:100%; height:150px; object-fit:cover; border-radius:8px; margin-bottom:1rem;" alt="Event Poster">` : '';
+            
+            let deleteBtn = '';
+            if (state.token && state.user) {
+                // Check if user is the creator of the event
+                const isOwner = e.organizer_id && (e.organizer_id._id === state.user.id || e.organizer_id === state.user.id);
+                // Admins can delete anything, Organizers can delete their own
+                if (state.user.role === 'admin' || (state.user.role === 'organizer' && isOwner)) {
+                    deleteBtn = `<button onclick="deleteEvent('${e._id}')" class="btn btn-secondary btn-block" style="margin-top:0.5rem; color: #ef4444; border-color: #ef4444;"><i class="fa-solid fa-trash"></i> Delete Event</button>`;
+                }
+            }
+
             return `
             <div class="card">
                 ${posterHtml}
@@ -191,6 +207,7 @@ async function renderEvents(appDiv) {
                 <p><i class="fa-solid fa-location-dot"></i> ${e.venue}</p>
                 <p style="font-size:0.9rem; color:#64748b;">${e.description}</p>
                 <button onclick="registerEvent('${e._id}')" class="btn btn-primary btn-block" style="margin-top:1rem;">Register Now (QR Ticket)</button>
+                ${deleteBtn}
             </div>
         `}).join('');
         document.getElementById('eventsList').innerHTML = evHtml;
@@ -211,8 +228,33 @@ window.registerEvent = async function (id) {
     } catch(err) { alert(err.message); }
 }
 
+window.deleteEvent = async function (id) {
+    if (!confirm("Are you sure you want to permanently delete this event? All registrations will be removed.")) return;
+    try {
+        const res = await apiCall(`/events/${id}`, 'DELETE');
+        alert(res.msg || 'Event deleted successfully.');
+        router();
+    } catch(err) { alert(err.message); }
+}
+
 async function renderDashboard(appDiv) {
     if(!state.token) return window.location.hash = '#/login';
+
+    // Auto-scan logic if accessed via QR Code Camera Link
+    const urlParams = new URLSearchParams(window.location.hash.split('?')[1]);
+    const scanTicket = urlParams.get('scan');
+    
+    if (scanTicket && (state.user.role === 'admin' || state.user.role === 'organizer')) {
+        try {
+            const res = await apiCall('/events/scan', 'POST', { ticket_id: scanTicket });
+            alert('✅ QR SCANNED SUCCESSFULLY: ' + res.msg);
+            window.location.hash = '#/dashboard'; // clear the parameter
+        } catch(err) { 
+            alert('❌ QR SCAN FAILED: ' + err.message); 
+            window.location.hash = '#/dashboard'; 
+        }
+    }
+
     appDiv.innerHTML = `
         <div class="container section">
             <h2>Welcome back, ${state.user.name} 👋</h2>
@@ -221,7 +263,7 @@ async function renderDashboard(appDiv) {
             <div style="margin-top: 3rem; background: #fff; padding: 2rem; border-radius:8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 <h3>Quick Actions</h3>
                 <div style="display:flex; gap: 1rem; margin-top: 1rem; flex-wrap:wrap;">
-                    ${state.user.role !== 'participant' ? '<button onclick="simulateScan()" class="btn btn-primary"><i class="fa-solid fa-qrcode"></i> Scan QR Attendance</button>' : ''}
+                    ${state.user.role !== 'participant' ? '<button onclick="simulateScan()" class="btn btn-primary"><i class="fa-solid fa-qrcode"></i> Manual QR Entry</button>' : ''}
                     <a href="#/events" class="btn btn-secondary">View Event Catalog</a>
                     <a href="#/calendar" class="btn btn-secondary">Interactive Calendar</a>
                 </div>

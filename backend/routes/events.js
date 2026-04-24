@@ -64,7 +64,8 @@ router.post('/:id/register', auth, async (req, res) => {
         if (existing) return res.status(400).json({ msg: 'Already registered' });
 
         const ticket_id = `TKT-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-        const qrCodeData = await QRCode.toDataURL(ticket_id);
+        // Encode a physical web URL so phone cameras can natively open it
+        const qrCodeData = await QRCode.toDataURL(`https://event-management-bms.netlify.app/#/dashboard?scan=${ticket_id}`);
 
         const newRegistration = new Registration({ event_id, user_id, ticket_id, qrCodeData });
         const reg = await newRegistration.save();
@@ -124,6 +125,31 @@ router.post('/scan', auth, async (req, res) => {
         req.app.get('io').emit('attendanceUpdate', { ticket_id, event_id: registration.event_id });
 
         res.json({ msg: 'Attendance verified & logged successfully!', registration });
+    } catch (err) { res.status(500).send('Server error'); }
+});
+
+// DELETE /api/events/:id - Delete an event
+router.delete('/:id', auth, async (req, res) => {
+    try {
+        const event = await Event.findById(req.params.id);
+        if (!event) return res.status(404).json({ msg: 'Event not found' });
+
+        if (req.user.role === 'participant') {
+            return res.status(403).json({ msg: 'Unauthorized' });
+        }
+
+        // Organizers can only delete their own events. Admins bypass this.
+        if (req.user.role === 'organizer' && event.organizer_id.toString() !== req.user.id) {
+            return res.status(403).json({ msg: 'Unauthorized: You can only delete events you created.' });
+        }
+
+        await Event.findByIdAndDelete(req.params.id);
+        await Registration.deleteMany({ event_id: req.params.id }); // Clean up all registrations
+        
+        // Push Real-time update to refresh event list
+        req.app.get('io').emit('eventDeleted', req.params.id);
+        
+        res.json({ msg: 'Event successfully removed' });
     } catch (err) { res.status(500).send('Server error'); }
 });
 
