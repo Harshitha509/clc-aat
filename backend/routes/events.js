@@ -86,10 +86,16 @@ router.post('/:id/register', auth, async (req, res) => {
                         <p><strong>Date:</strong> ${new Date(event.date).toLocaleString()}</p>
                         <p><strong>Venue:</strong> ${event.venue}</p>
                         <p>Please present this QR Code ticket to the organizers at the entrance:</p>
-                        <img src="${qrCodeData}" alt="QR Ticket" style="width: 200px; height: 200px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.2);" />
+                        <img src="cid:ticket_qr" alt="QR Ticket" style="width: 200px; height: 200px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.2);" />
                         <p style="margin-top: 10px;"><strong>Ticket ID:</strong> ${ticket_id}</p>
                     </div>
-                `
+                `,
+                attachments: [{
+                    filename: 'qrcode.png',
+                    content: qrCodeData.split("base64,")[1],
+                    encoding: 'base64',
+                    cid: 'ticket_qr' // This connects the attachment to the <img src="cid:ticket_qr"> tag!
+                }]
             });
             console.log(`[SMTP] Successfully sent QR ticket to ${user.email}`);
         } catch (emailErr) {
