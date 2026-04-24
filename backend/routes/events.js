@@ -72,8 +72,29 @@ router.post('/:id/register', auth, async (req, res) => {
         // Push real time analytics trigger
         req.app.get('io').emit('newRegistration', { event_id });
         
-        // Console log simulating outbound SMTP push
-        console.log(`[SMTP] Sending Ticket Email to User ${user_id} with QR Code for ${event.title}`);
+        // Real Outbound Email Delivery
+        try {
+            const user = await require('../models/User').findById(user_id);
+            await transporter.sendMail({
+                from: process.env.EMAIL_USER,
+                to: user.email,
+                subject: `Your VIP Ticket: ${event.title}`,
+                html: `
+                    <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
+                        <h2>You are officially registered! 🎉</h2>
+                        <p><strong>Event:</strong> ${event.title}</p>
+                        <p><strong>Date:</strong> ${new Date(event.date).toLocaleString()}</p>
+                        <p><strong>Venue:</strong> ${event.venue}</p>
+                        <p>Please present this QR Code ticket to the organizers at the entrance:</p>
+                        <img src="${qrCodeData}" alt="QR Ticket" style="width: 200px; height: 200px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.2);" />
+                        <p style="margin-top: 10px;"><strong>Ticket ID:</strong> ${ticket_id}</p>
+                    </div>
+                `
+            });
+            console.log(`[SMTP] Successfully sent QR ticket to ${user.email}`);
+        } catch (emailErr) {
+            console.error('[SMTP] Email Delivery Failed. Missing or incorrect EMAIL_USER/EMAIL_PASS in .env', emailErr.message);
+        }
 
         res.json(reg);
     } catch(err) { res.status(500).send('Server error'); }
