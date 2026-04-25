@@ -205,8 +205,13 @@ async function renderEvents(appDiv) {
             return;
         }
         const evHtml = events.map(e => {
-            // Because we store Base64 now, we don't need the Render URL prefix
-            const posterHtml = e.imageUrl ? `<img src="${e.imageUrl}" style="width:100%; height:150px; object-fit:cover; border-radius:8px; margin-bottom:1rem;" alt="Event Poster">` : '';
+            // Backward compatibility for old Render uploads vs new Base64 Database strings
+            let finalImageUrl = '';
+            if (e.imageUrl) {
+                if (e.imageUrl.startsWith('data:') || e.imageUrl.startsWith('http')) finalImageUrl = e.imageUrl;
+                else finalImageUrl = 'https://smart-event-api.onrender.com' + e.imageUrl;
+            }
+            const posterHtml = finalImageUrl ? `<img src="${finalImageUrl}" style="width:100%; height:150px; object-fit:cover; border-radius:8px; margin-bottom:1rem;" alt="Event Poster">` : '';
             const detailsHtml = e.detailsFileUrl ? `<a href="${e.detailsFileUrl}" download="${e.detailsFileName || 'event-details'}" class="btn btn-secondary btn-block" style="margin-top: 0.5rem;"><i class="fa-solid fa-file-arrow-down"></i> Download Details Document</a>` : '';
             
             let deleteBtn = '';
