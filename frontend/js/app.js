@@ -10,17 +10,32 @@ const socket = io('https://smart-event-api.onrender.com');
 
 // Listen for Real-Time cloud events
 socket.on('newEvent', (data) => {
-    console.log("Real-time Push: New Event Created", data);
     if(window.location.hash === '#/events') router();
 });
 socket.on('eventDeleted', (id) => {
-    console.log("Real-time Push: Event Deleted", id);
     if(window.location.hash === '#/events' || window.location.hash === '#/calendar') router();
 });
 socket.on('attendanceUpdate', (data) => {
-    console.log("Real-time Push: Someone checked in!", data);
     if(window.location.hash === '#/admin') router();
 });
+
+// --- Global Toast Helper ---
+function showToast(msg, type = 'success') {
+    Toastify({
+        text: msg,
+        duration: 4000,
+        close: true,
+        gravity: "bottom",
+        position: "center",
+        style: {
+            background: type === 'error' ? "linear-gradient(to right, #ef4444, #f87171)" : "linear-gradient(to right, #10b981, #34d399)",
+            borderRadius: "8px",
+            fontFamily: "Inter, sans-serif",
+            fontWeight: "500",
+            boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)"
+        }
+    }).showToast();
+}
 
 // --- API Helpers ---
 async function apiCall(endpoint, method = 'GET', body = null, isFormData = false) {
@@ -46,6 +61,7 @@ const routes = {
     '/calendar': renderCalendar,
     '/dashboard': renderDashboard,
     '/create-event': renderCreateEvent,
+    '/edit-event': renderEditEvent,
     '/admin': renderAdminDashboard,
 };
 
@@ -139,8 +155,9 @@ async function renderLogin(appDiv) {
             localStorage.setItem('token', data.token);
             localStorage.setItem('user', JSON.stringify(data.user));
             state.token = data.token; state.user = data.user;
+            showToast('Login successful! Welcome back.');
             window.location.hash = '#/dashboard';
-        } catch (err) { alert(err.message); }
+        } catch (err) { showToast(err.message, 'error'); }
     });
 }
 
@@ -173,8 +190,9 @@ async function renderSignup(appDiv) {
             localStorage.setItem('token', data.token);
             localStorage.setItem('user', JSON.stringify(data.user));
             state.token = data.token; state.user = data.user;
+            showToast('Account created successfully!');
             window.location.hash = '#/dashboard';
-        } catch (err) { alert(err.message); }
+        } catch (err) { showToast(err.message, 'error'); }
     });
 }
 
@@ -187,15 +205,22 @@ async function renderEvents(appDiv) {
             return;
         }
         const evHtml = events.map(e => {
-            const posterHtml = e.imageUrl ? `<img src="${e.imageUrl.startsWith('http') ? e.imageUrl : 'https://smart-event-api.onrender.com' + e.imageUrl}" style="width:100%; height:150px; object-fit:cover; border-radius:8px; margin-bottom:1rem;" alt="Event Poster">` : '';
+            // Because we store Base64 now, we don't need the Render URL prefix
+            const posterHtml = e.imageUrl ? `<img src="${e.imageUrl}" style="width:100%; height:150px; object-fit:cover; border-radius:8px; margin-bottom:1rem;" alt="Event Poster">` : '';
+            const detailsHtml = e.detailsFileUrl ? `<a href="${e.detailsFileUrl}" download="${e.detailsFileName || 'event-details'}" class="btn btn-secondary btn-block" style="margin-top: 0.5rem;"><i class="fa-solid fa-file-arrow-down"></i> Download Details Document</a>` : '';
             
             let deleteBtn = '';
             if (state.token && state.user) {
-                // Check if user is the creator of the event
+                // Check if the current user is the owner of this specific event
                 const isOwner = e.organizer_id && (e.organizer_id._id === state.user.id || e.organizer_id === state.user.id);
-                // Admins can delete anything, Organizers can delete their own
+                
+                // Only Admins or the exact Organizer who created it can see these buttons
                 if (state.user.role === 'admin' || (state.user.role === 'organizer' && isOwner)) {
-                    deleteBtn = `<button onclick="deleteEvent('${e._id}')" class="btn btn-secondary btn-block" style="margin-top:0.5rem; color: #ef4444; border-color: #ef4444;"><i class="fa-solid fa-trash"></i> Delete Event</button>`;
+                    deleteBtn = `
+                    <div style="display:flex; gap:0.5rem; margin-top:0.5rem;">
+                        <button onclick="window.location.hash='#/edit-event?id=${e._id}'" class="btn btn-secondary" style="flex:1;"><i class="fa-solid fa-pen"></i> Edit</button>
+                        <button onclick="deleteEvent('${e._id}')" class="btn btn-secondary" style="flex:1; color: #ef4444; border-color: #ef4444;"><i class="fa-solid fa-trash"></i> Delete</button>
+                    </div>`;
                 }
             }
 
@@ -207,6 +232,7 @@ async function renderEvents(appDiv) {
                 <p><i class="fa-solid fa-location-dot"></i> ${e.venue}</p>
                 <p style="font-size:0.9rem; color:#64748b;">${e.description}</p>
                 <button onclick="registerEvent('${e._id}')" class="btn btn-primary btn-block" style="margin-top:1rem;">Register Now (QR Ticket)</button>
+                ${detailsHtml}
                 ${deleteBtn}
             </div>
         `}).join('');
@@ -218,23 +244,23 @@ async function renderEvents(appDiv) {
 
 window.registerEvent = async function (id) {
     if (!state.token) {
-        alert('Please login to register for an event.');
+        showToast('Please login to register for an event.', 'error');
         window.location.hash = '#/login';
         return;
     }
     try {
         const data = await apiCall(`/events/${id}/register`, 'POST');
-        alert('Registered Successfully! Your Unique Ticket ID is: ' + data.ticket_id + '\nAn automated email with your QR code has been scheduled.');
-    } catch(err) { alert(err.message); }
+        showToast('Registered Successfully! Email has been sent.');
+    } catch(err) { showToast(err.message, 'error'); }
 }
 
 window.deleteEvent = async function (id) {
     if (!confirm("Are you sure you want to permanently delete this event? All registrations will be removed.")) return;
     try {
         const res = await apiCall(`/events/${id}`, 'DELETE');
-        alert(res.msg || 'Event deleted successfully.');
+        showToast(res.msg || 'Event deleted successfully.');
         router();
-    } catch(err) { alert(err.message); }
+    } catch(err) { showToast(err.message, 'error'); }
 }
 
 async function renderDashboard(appDiv) {
@@ -247,10 +273,10 @@ async function renderDashboard(appDiv) {
     if (scanTicket && (state.user.role === 'admin' || state.user.role === 'organizer')) {
         try {
             const res = await apiCall('/events/scan', 'POST', { ticket_id: scanTicket });
-            alert('✅ QR SCANNED SUCCESSFULLY: ' + res.msg);
+            showToast('✅ ' + res.msg);
             window.location.hash = '#/dashboard'; // clear the parameter
         } catch(err) { 
-            alert('❌ QR SCAN FAILED: ' + err.message); 
+            showToast('❌ ' + err.message, 'error'); 
             window.location.hash = '#/dashboard'; 
         }
     }
@@ -277,8 +303,8 @@ window.simulateScan = async function() {
     if(!ticketId) return;
     try {
         const res = await apiCall('/events/scan', 'POST', { ticket_id: ticketId });
-        alert('✅ SUCCESS: ' + res.msg);
-    } catch(err) { alert('❌ ERROR: ' + err.message); }
+        showToast('✅ SUCCESS: ' + res.msg);
+    } catch(err) { showToast('❌ ERROR: ' + err.message, 'error'); }
 }
 
 async function renderCreateEvent(appDiv) {
@@ -302,6 +328,9 @@ async function renderCreateEvent(appDiv) {
                 <label>Upload Cloud Poster (Image)</label>
                 <input type="file" id="poster" accept="image/*" class="form-control" required style="padding:0.5rem;">
 
+                <label>Upload Details Document (Optional PDF/Word File)</label>
+                <input type="file" id="detailsFile" accept=".pdf,.doc,.docx,.txt" class="form-control" style="padding:0.5rem;">
+
                 <button type="submit" class="btn btn-primary btn-block" style="margin-top:1rem;">Publish Event to Cloud</button>
             </form>
         </div>
@@ -315,12 +344,79 @@ async function renderCreateEvent(appDiv) {
             formData.append('date', e.target.date.value);
             formData.append('venue', e.target.venue.value);
             formData.append('poster', e.target.poster.files[0]);
+            if(e.target.detailsFile.files.length > 0) formData.append('detailsFile', e.target.detailsFile.files[0]);
 
             await apiCall('/events', 'POST', formData, true); // true = isFormData
-            alert('Event & Poster successfully uploaded to Cloud Database!');
+            showToast('Event & Resources successfully uploaded to Cloud Database!');
             window.location.hash = '#/events';
-        } catch(err) { alert(err.message); }
+        } catch(err) { showToast(err.message, 'error'); }
    });
+}
+
+// --- NEW MODULE: Edit Event ---
+async function renderEditEvent(appDiv) {
+   if(!state.token || state.user.role === 'participant') return window.location.hash = '#/';
+   
+   const urlParams = new URLSearchParams(window.location.hash.split('?')[1]);
+   const eventId = urlParams.get('id');
+   if(!eventId) return window.location.hash = '#/events';
+
+   appDiv.innerHTML = '<div class="loader"><i class="fa-solid fa-spinner fa-spin"></i> Loading event data...</div>';
+   try {
+       const events = await apiCall('/events');
+       const event = events.find(e => e._id === eventId);
+       if(!event) throw new Error('Event not found');
+
+       // Format date for datetime-local input
+       const dateObj = new Date(event.date);
+       const dateStr = new Date(dateObj.getTime() - dateObj.getTimezoneOffset() * 60000).toISOString().slice(0,16);
+
+       appDiv.innerHTML = `
+            <div class="container section">
+                <h2 class="text-center" style="margin-bottom:2rem;">Edit Event</h2>
+                <form id="editEventForm" class="form-container" style="max-width: 600px;">
+                    <label>Event Title</label>
+                    <input type="text" id="title" value="${event.title}" required class="form-control">
+                    
+                    <label>Description</label>
+                    <textarea id="description" required class="form-control" rows="4">${event.description}</textarea>
+                    
+                    <label>Date & Time</label>
+                    <input type="datetime-local" id="date" value="${dateStr}" required class="form-control">
+                    
+                    <label>Venue / Location</label>
+                    <input type="text" id="venue" value="${event.venue}" required class="form-control">
+                    
+                    <label>Upload New Poster (Optional)</label>
+                    <input type="file" id="poster" accept="image/*" class="form-control" style="padding:0.5rem;">
+
+                    <label>Upload Details Document (Optional PDF/Word File)</label>
+                    <input type="file" id="detailsFile" accept=".pdf,.doc,.docx,.txt" class="form-control" style="padding:0.5rem;">
+
+                    <button type="submit" class="btn btn-primary btn-block" style="margin-top:1rem;">Save Changes</button>
+                    <button type="button" onclick="window.location.hash='#/events'" class="btn btn-secondary btn-block">Cancel</button>
+                </form>
+            </div>
+       `;
+       document.getElementById('editEventForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try {
+                const formData = new FormData();
+                formData.append('title', e.target.title.value);
+                formData.append('description', e.target.description.value);
+                formData.append('date', e.target.date.value);
+                formData.append('venue', e.target.venue.value);
+                if(e.target.poster.files.length > 0) formData.append('poster', e.target.poster.files[0]);
+                if(e.target.detailsFile.files.length > 0) formData.append('detailsFile', e.target.detailsFile.files[0]);
+
+                await apiCall('/events/' + eventId, 'PUT', formData, true);
+                showToast('Event successfully updated!');
+                window.location.hash = '#/events';
+            } catch(err) { showToast(err.message, 'error'); }
+       });
+   } catch(err) {
+       appDiv.innerHTML = `<div class="container section"><p style="color:red; text-align:center;">${err.message}</p></div>`;
+   }
 }
 
 // --- NEW MODULE: Calendar View ---

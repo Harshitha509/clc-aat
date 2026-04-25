@@ -9,18 +9,9 @@ const fs = require('fs');
 const multer = require('multer');
 const path = require('path');
 
-// Configure Multer for "Cloud Storage" logic
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const dir = './uploads/';
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-        cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-        cb(null, 'poster-' + Date.now() + path.extname(file.originalname));
-    }
-});
-const upload = multer({ storage: storage });
+// Configure Multer using Memory Storage (fixes Render Ephemeral Disk Issue)
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage, limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB limit
 
 // Email Automations
 const transporter = nodemailer.createTransport({
@@ -36,14 +27,30 @@ router.get('/', async (req, res) => {
     } catch (err) { res.status(500).send('Server error'); }
 });
 
-// POST /api/events - Create new event with Poster Upload
-router.post('/', auth, upload.single('poster'), async (req, res) => {
+// POST /api/events - Create new event with Poster Upload & Details
+router.post('/', auth, upload.fields([{name: 'poster', maxCount: 1}, {name: 'detailsFile', maxCount: 1}]), async (req, res) => {
     if(req.user.role === 'participant') return res.status(403).json({msg: 'Unauthorized'});
     try {
+        let imageUrl = null;
+        if(req.files && req.files['poster']) {
+            const file = req.files['poster'][0];
+            imageUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+        }
+        
+        let detailsFileUrl = null;
+        let detailsFileName = null;
+        if(req.files && req.files['detailsFile']) {
+            const file = req.files['detailsFile'][0];
+            detailsFileUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+            detailsFileName = file.originalname;
+        }
+
         const newEvent = new Event({
             ...req.body,
             organizer_id: req.user.id,
-            imageUrl: req.file ? `/uploads/${req.file.filename}` : null
+            imageUrl,
+            detailsFileUrl,
+            detailsFileName
         });
         const event = await newEvent.save();
         
@@ -150,6 +157,42 @@ router.delete('/:id', auth, async (req, res) => {
         req.app.get('io').emit('eventDeleted', req.params.id);
         
         res.json({ msg: 'Event successfully removed' });
+    } catch (err) { res.status(500).send('Server error'); }
+});
+
+// PUT /api/events/:id - Edit an event
+router.put('/:id', auth, upload.fields([{name: 'poster', maxCount: 1}, {name: 'detailsFile', maxCount: 1}]), async (req, res) => {
+    try {
+        let event = await Event.findById(req.params.id);
+        if (!event) return res.status(404).json({ msg: 'Event not found' });
+
+        if (req.user.role === 'participant') {
+            return res.status(403).json({ msg: 'Unauthorized' });
+        }
+
+        // Organizers can only edit their own events. Admins bypass this.
+        if (req.user.role === 'organizer' && event.organizer_id.toString() !== req.user.id) {
+            return res.status(403).json({ msg: 'Unauthorized: You can only edit events you created.' });
+        }
+
+        if(req.body.title) event.title = req.body.title;
+        if(req.body.description) event.description = req.body.description;
+        if(req.body.date) event.date = req.body.date;
+        if(req.body.venue) event.venue = req.body.venue;
+        
+        if(req.files && req.files['poster']) {
+            const file = req.files['poster'][0];
+            event.imageUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+        }
+        if(req.files && req.files['detailsFile']) {
+            const file = req.files['detailsFile'][0];
+            event.detailsFileUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+            event.detailsFileName = file.originalname;
+        }
+
+        await event.save();
+        req.app.get('io').emit('newEvent', event); // Triggers frontend refresh
+        res.json({ msg: 'Event successfully updated', event });
     } catch (err) { res.status(500).send('Server error'); }
 });
 
